@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <errno.h>
 #include <limits.h>
@@ -17,7 +18,8 @@
 
 
 #define ST_THRD_READY (proc_args_t*)(-1)
-//#define ST_THRD_DEAD (proc_args_t*)(-2)
+
+const char *RESULTS_ERROR = "Error counting results";
 
 typedef struct proc_args_t {
     double x;
@@ -35,22 +37,26 @@ typedef struct thread_info {
 
 
 char *exec_name;
-FILE* temp = NULL;
-char *result_tmp_file_name = "/tmp/taylor.tmp";
+FILE* temp_f = NULL;
+char *result_filename = "/tmp/taylor.tmp";
 
 
-void print_error(char *msg);
+void print_error(const char *msg);
 void print_help();
 
 void sig_usr1_handler(int signo) {
-#ifdef DEBUG
-    printf("%ld received SigUsr1\n", syscall(SYS_gettid) );
-    fflush(stdout);
-#endif
+    /* empty signal handler */
 }
 
-void *process(void *args);
 
+void kill_thread(pthread_t thread_id) {
+    if (thread_id != 0) {
+        pthread_kill(thread_id, SIGUSR1);
+    }
+}   /* kill_thread */
+
+
+void *process(void *args);
 char is_valid(long val);
 
 
@@ -77,10 +83,10 @@ int main(int argc, char *argv[])
        exit(EXIT_FAILURE);
     }
 
-/* creatin temp file */
-    temp = tmpfile();
-    if (temp == NULL) {
+
+    if ( (temp_f = fopen("/tmp/log.txt", "w+") ) == NULL) {
         print_error("Can't create temporary file");
+        exit((EXIT_FAILURE));
     }
 
 /* clear list of threads info */
@@ -99,7 +105,6 @@ int main(int argc, char *argv[])
     signal(SIGUSR1, sig_usr1_handler);
 
     int curr_thrd = 0;
-    pthread_t thread_id = 0;
     double x = 0;
 
     int i = 0;
@@ -116,16 +121,14 @@ int main(int argc, char *argv[])
             targs->i = i;
             targs->member_number = m;
 
-/* wait for any thread to be ready */
+    /* wait for any thread to be ready */
             do {
                 curr_thrd = (curr_thrd + 1) % mems_count_n;
-
             } while (threads_list[curr_thrd].args != ST_THRD_READY);
 
-            if ( (thread_id = threads_list[curr_thrd].tid) != 0) {
-                pthread_kill(thread_id, SIGUSR1);
-            }
+            kill_thread(threads_list[curr_thrd].tid);
 
+    /* pass new aguments */
             threads_list[curr_thrd].args = targs;
 
             if (pthread_create( &(threads_list[m].tid), &thread_attr,
@@ -134,27 +137,59 @@ int main(int argc, char *argv[])
                 print_error("Error creating thread!");
                 exit(EXIT_FAILURE);
             }
-        }
-    }
 
+        }   /* m */
+
+    }   /* i */
+
+#ifdef DEBUG
     printf("\nTask complited\nWaiting for threads...\n\n");
     fflush(stdout);
+#endif
 
-/* wait for all threads */
+/* kill all threads */
     for (m = 0; m < mems_count_n; ++m) {
         while (threads_list[m].args != ST_THRD_READY)
             ; /* wait */
 
-        if (threads_list[m].tid != 0) {
-            pthread_kill(threads_list[m].tid, SIGUSR1); /* terminate */
-        }
+        kill_thread(threads_list[m].tid);
     }
 
     free(threads_list);
 
-/* TODO: pick all results together */
-    printf("All done!\nPress Enter...\n");
-    getchar();
+/* pick all results together */
+    double *results = (double*)alloca(sizeof(double)*array_size_N);
+    memset(results, 0, sizeof(double)*array_size_N);
+
+    rewind(temp_f); /* !!! important */
+    for (i = 0; i < array_size_N*mems_count_n; ++i) {
+        if (fscanf(temp_f, "%*d %d %lf", &m, &x) == 2) {
+            if ( (m >=0) && (m < array_size_N) ) {
+                results[m] += x;
+#ifdef DEBUG
+                printf("%lf\n", x);
+#endif
+            } else {
+
+            }
+        } else {
+            print_error(RESULTS_ERROR);
+            exit((EXIT_FAILURE));
+        }
+    }
+
+/* print results */
+    FILE *result_f = fopen(result_filename, "wt");
+    if (result_f == NULL) {
+        print_error("Can't create result file");
+        exit((EXIT_FAILURE));
+    }
+
+    for (m = 0; m < array_size_N; ++m) {
+        fprintf(result_f, "%lf\n", results[m]);
+    }
+
+    fclose(result_f);
 
     return 0;
 }   /* main */
@@ -177,7 +212,7 @@ char is_valid(long val) {
 }   /* is_valid */
 
 
-void print_error(char *msg) {
+void print_error(const char *msg) {
     printf("%s: %s\n", exec_name, msg);
 
 }   /* print_error */
@@ -189,8 +224,8 @@ void print_result(double result, int n) {
     printf("%d %d %lf\n", id, n, result);
     fflush(stdout);
 
-    fprintf(temp, "%d %d %lf\n", id, n, result);
-    fflush(temp);
+    fprintf(temp_f, "%d %d %lf\n", id, n, result);
+    fflush(temp_f);
 
 }   /* print_result */
 
