@@ -15,9 +15,7 @@
 #include <math.h>
 
 
-#define ST_THRD_WAIT (proc_args_t*)(0)
-#define ST_THRD_TERMINATE (proc_args_t*)(-1)
-
+#define ST_THRD_READY (proc_args_t*)(-1)
 
 typedef struct proc_args_t {
     int i, N;
@@ -25,30 +23,39 @@ typedef struct proc_args_t {
 
 } proc_args_t;
 
-proc_args_t **threads_args = NULL; /* array of pointers */
+
+typedef struct thread_info {
+    pthread_t tid;
+    proc_args_t *args;
+
+} thread_info;
 
 
 char *exec_name;
 
+void print_error(char *msg);
 void print_help();
 
-void print_error(char *msg);
+void sig_usr1_handler(int signo);
 void *process(void *args);
 
 char is_valid(long val);
 
+/*
+#define RELIABLE_OUTPUT
+*/
 
 int main(int argc, char *argv[])
 {
     exec_name = basename(argv[0]);
 
+/* process arguments */
     if (argc < 2) {
         print_error("Not enough arguments");
         print_help();
         exit(EXIT_FAILURE);
     }
 
-    /* process params */
     errno = 0;
 
     int array_size_N = strtol(argv[1], NULL, 10);  /* N */
@@ -61,57 +68,64 @@ int main(int argc, char *argv[])
        exit(EXIT_FAILURE);
     }
 
-    /* threads input list */
-    threads_args = (proc_args_t**)malloc(sizeof(proc_args_t*) * mems_count_n);
+/* clear list of threads info */
+    thread_info *threads_list = (thread_info*)calloc(mems_count_n, sizeof(thread_info));
 
+    int m = 0;
+    for (m = 0; m < mems_count_n; ++m) {
+        threads_list[m].args = ST_THRD_READY;
+    }
+
+/* processing */
     pthread_attr_t thread_attr;
     pthread_attr_init(&thread_attr);
     pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
 
-    int i = 0;    
-
-    /* empty threads list */
-    for (i = 0; i < mems_count_n; ++i) {
-        threads_args[i] = ST_THRD_TERMINATE;
-    }
+#ifdef RELIABLE_OUTPUT
+    signal(SIGUSR1, sig_usr1_handler);
+#endif
 
     int curr_thrd = 0;
+    pthread_t thread_id = 0;
 
-    int j = 0;
-    for (j = 0; j < array_size_N; ++j) {
-        for (i = 0; i < mems_count_n; ++i) {
+    int i = 0;
+    for (i = 0; i < array_size_N; ++i) {
+        for (m = 0; m < mems_count_n; ++m) {
             proc_args_t* targs = malloc(sizeof(proc_args_t) );
 
             targs->i = i;
             targs->N = array_size_N;
-            targs->member_number = i;
+            targs->member_number = m;
 
-            /* wait for any thread to be ready */
-            while (threads_args[curr_thrd] != ST_THRD_WAIT) {
+/* wait for any thread to be ready */
+            while (threads_list[curr_thrd].args != ST_THRD_READY) {
                 curr_thrd = (curr_thrd + 1) % mems_count_n ;
-
-//                printf("%d\n", curr_thrd);
             }
 
-            threads_args[curr_thrd] = targs;
+            if ( (thread_id = threads_list[curr_thrd].tid) != 0) {
+                pthread_kill(thread_id, SIGUSR1);
+            }
+
+            threads_list[curr_thrd].args = targs;
+
+            if (pthread_create( &(threads_list[m].tid), &thread_attr,
+                                &process, (void*)(threads_list + curr_thrd) ) != 0) {
+
+                print_error("Error creating thread!");
+                exit(EXIT_FAILURE);
+            }
         }
     }
 
-    /* wait for all threads */
-    do {
-        j = mems_count_n;
-        for (i = 0; i < mems_count_n; ++i) {
-            if (threads_args[i] == ST_THRD_WAIT)
-                --j;
-        }
-    } while (j != 0);
-
-    /* terminate all threads */
-    for (i = 0; i < mems_count_n; ++i) {
-        threads_args[i] = ST_THRD_TERMINATE;
+/* terminate all threads */
+    for (m = 0; m < mems_count_n; ++i) {
+        while (threads_list[m].args != ST_THRD_READY) ; /* wait */
+        pthread_kill(threads_list[m].tid, SIGUSR1); /* terminate */
     }
 
     /* TODO: pick all results together */
+
+    getchar();
 
     return 0;
 }   /* main */
@@ -151,51 +165,54 @@ void print_result(pthread_t id, double result) {
 
 double get_sin_taylor_member(double x, int member_number) {
     double result = 1;
-    for (int i = 1; i <= member_number * 2 + 1; i++) {
+    for (int i = 1; i <= 2*member_number + 1; ++i) {
         result *= x / i;
-
     }
-    return (member_number % 2) ? -result : result;
+
+    return (member_number & 1)*(-1)*result;
 }
 
-/* TODO: make with signals */
-/*
- * sigmask
- *
- * tkill
- *
- * sigwait
- *
- * */
+
+#ifdef RELIABLE_OUTPUT
+void sig_usr1_handler(int signo) {
+    print_result(tid, result);
+}
+#endif
+
 
 
 void *process(void *args) {
     pid_t tid = syscall(SYS_gettid);
-    proc_args_t **args_p = (proc_args_t**)args;
 
-    *args_p = ST_THRD_WAIT;
+    thread_info* info = ( (thread_info*)args);
 
     double result = 0;
+    double x = (2 * M_PI * (info->args->i) ) / (info->args->N);
+    /*
+    if (x != 0){
+        x = M_PI - x;
+    }
+*/
+    result = get_sin_taylor_member(x, info->args->member_number);
 
-    do {
-        while ( (*args_p) == ST_THRD_WAIT) ;    /* wait for job */
+#ifndef RELIABLE_OUTPUT
+    print_result(tid, result);
+#endif
 
-        double x = (2 * M_PI * (*args_p)->i)/(*args_p)->N;
-        if (x != 0){
-            x = M_PI - x;
-        }
+    int sig_num = 0;
+    sigset_t sig_set;
+    sigemptyset(&sig_set);
+    sigaddset(&sig_set, SIGUSR1);
 
-        result = get_sin_taylor_member(x, (*args_p)->member_number);
+    free(info->args);
+    info->args = ST_THRD_READY;
 
-        print_result(tid, result);
+/* waiting to exit */
+    printf("%d\tis waiting\n", tid);
+    sigwait(&sig_set, &sig_num);
 
-        (*args_p) = ST_THRD_WAIT;
+    printf("%d\tis terminated\n", tid);
 
-    } while ( (*args_p) != ST_THRD_TERMINATE);
-
-    args_p = NULL;
-
-    free(args);
     return NULL;
 
 }   /* get_sin_taylor_member */
