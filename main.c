@@ -44,14 +44,21 @@ char *result_filename = "/tmp/taylor.tmp";
 void print_error(const char *msg);
 void print_help();
 
+int terminated = 0;
+
 void sig_usr1_handler(int signo) {
-    /* empty signal handler */
+    terminated = 1;
 }
 
 
 void kill_thread(pthread_t thread_id) {
     if (thread_id != 0) {
         pthread_kill(thread_id, SIGUSR1);
+
+        if (pthread_join(thread_id, NULL) == -1) {
+            print_error("Error joining thread!");
+            exit(EXIT_FAILURE);
+        }
     }
 }   /* kill_thread */
 
@@ -100,7 +107,7 @@ int main(int argc, char *argv[])
 /* processing */
     pthread_attr_t thread_attr;
     pthread_attr_init(&thread_attr);
-    pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
+    pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_JOINABLE);
 
     signal(SIGUSR1, sig_usr1_handler);
 
@@ -131,7 +138,7 @@ int main(int argc, char *argv[])
     /* pass new aguments */
             threads_list[curr_thrd].args = targs;
 
-            if (pthread_create( &(threads_list[m].tid), &thread_attr,
+            if (pthread_create( &(threads_list[curr_thrd].tid), &thread_attr,
                                 &process, (void*)(threads_list + curr_thrd) ) != 0) {
 
                 print_error("Error creating thread!");
@@ -244,22 +251,18 @@ void *process(void *args) {
 
     thread_info* info = ( (thread_info*)args);
     double result = 0;
-    int sig_num = 0;
 
     result = get_sin_taylor_member(info->args->x, info->args->member_number);
 
     print_result(result, info->args->i);
 
-    sigset_t sig_set;
-    sigemptyset(&sig_set);
-    sigaddset(&sig_set, SIGUSR1);
-
     free(info->args);
     info->args = ST_THRD_READY;
 
 
-/* waiting to exit */
-    sigwait(&sig_set, &sig_num);
+    while (!terminated) {
+    /* waiting to exit */
+    }
 
 #ifdef DEBUG
     printf("%d\tis terminated\n", tid);
