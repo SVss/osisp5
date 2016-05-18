@@ -16,6 +16,9 @@
 
 #include <math.h>
 
+//#define DEBUG_1
+//#define DEBUG_2
+
 
 #define ST_THRD_READY (proc_args_t*)(-1)
 
@@ -44,14 +47,32 @@ char *result_filename = "/tmp/taylor.tmp";
 void print_error(const char *msg);
 void print_help();
 
+char terminated = 0;
+
 void sig_usr1_handler(int signo) {
-    /* empty signal handler */
+
+    terminated = 1;
+
+#ifdef DEBUG_2
+    printf("%lu signal received!\n", syscall(SYS_gettid));
+    fflush(stdout);
+#endif
 }
 
 
 void kill_thread(pthread_t thread_id) {
+
     if (thread_id != 0) {
+#ifdef DEBUG_1
+        printf("joining thread...\n");
+        fflush(stdout);
+#endif
         pthread_kill(thread_id, SIGUSR1);
+
+        if (pthread_join(thread_id, NULL) == -1) {
+            print_error("Error joining thread!");
+            exit(EXIT_FAILURE);
+        }
     }
 }   /* kill_thread */
 
@@ -98,10 +119,6 @@ int main(int argc, char *argv[])
     }
 
 /* processing */
-    pthread_attr_t thread_attr;
-    pthread_attr_init(&thread_attr);
-    pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
-
     signal(SIGUSR1, sig_usr1_handler);
 
     int curr_thrd = 0;
@@ -131,7 +148,8 @@ int main(int argc, char *argv[])
     /* pass new aguments */
             threads_list[curr_thrd].args = targs;
 
-            if (pthread_create( &(threads_list[m].tid), &thread_attr,
+            terminated = 0;
+            if (pthread_create( &(threads_list[m].tid), NULL,
                                 &process, (void*)(threads_list + curr_thrd) ) != 0) {
 
                 print_error("Error creating thread!");
@@ -142,19 +160,25 @@ int main(int argc, char *argv[])
 
     }   /* i */
 
-#ifdef DEBUG
+#define DEBUG_0
+#ifdef DEBUG_0
     printf("\nTask complited\nWaiting for threads...\n\n");
     fflush(stdout);
 #endif
 
+    printf("before killing all\n");
 /* kill all threads */
     for (m = 0; m < mems_count_n; ++m) {
+        printf("%d\t", m);
         while (threads_list[m].args != ST_THRD_READY)
             ; /* wait */
 
+        printf("...waiting\t");
         kill_thread(threads_list[m].tid);
+        printf("...killed\n");
     }
 
+    printf("before freeing list\n");
     free(threads_list);
 
 /* pick all results together */
@@ -221,8 +245,10 @@ void print_error(const char *msg) {
 void print_result(double result, int n) {
     pid_t id = syscall(SYS_gettid);
 
+#ifdef DEBUG_1
     printf("%d %d %lf\n", id, n, result);
     fflush(stdout);
+#endif
 
     fprintf(temp_f, "%d %d %lf\n", id, n, result);
     fflush(temp_f);
@@ -241,31 +267,37 @@ double get_sin_taylor_member(double x, int member_number) {
 
 
 void *process(void *args) {
-
     thread_info* info = ( (thread_info*)args);
+
     double result = 0;
-    int sig_num = 0;
+//    int sig_num = 0;
 
     result = get_sin_taylor_member(info->args->x, info->args->member_number);
 
     print_result(result, info->args->i);
-
+/*
     sigset_t sig_set;
     sigemptyset(&sig_set);
     sigaddset(&sig_set, SIGUSR1);
-
+*/
     free(info->args);
     info->args = ST_THRD_READY;
 
-
 /* waiting to exit */
-    sigwait(&sig_set, &sig_num);
 
-#ifdef DEBUG
-    printf("%d\tis terminated\n", tid);
+#ifdef DEBUG_1
+    printf("%lu is waiting... %s\n", syscall(SYS_gettid), (terminated == 0)? "yes" : "no");
+    fflush(stdout);
+#endif
+    while (terminated == 0) {
+//        sigwait(&sig_set, &sig_num);
+    }
+
+#ifdef DEBUG_1
+    printf("%lu is terminated\n", syscall(SYS_gettid));
     fflush(stdout);
 #endif
 
-    return NULL;
+    return 0;
 
 }   /* process */
