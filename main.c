@@ -32,6 +32,7 @@ typedef struct proc_args_t {
 typedef struct thread_info {
     pthread_t tid;
     proc_args_t *args;
+    int terminated;
 
 } thread_info;
 
@@ -51,11 +52,12 @@ void sig_usr1_handler(int signo) {
 }
 
 
-void kill_thread(pthread_t thread_id) {
-    if (thread_id != 0) {
-        pthread_kill(thread_id, SIGUSR1);
+void kill_thread(thread_info *thrdinfo) {
+    if (thrdinfo->tid != 0) {
+//        pthread_kill(thrdinfo.tid, SIGUSR1);
+        thrdinfo->terminated = 1;
 
-        if (pthread_join(thread_id, NULL) == -1) {
+        if (pthread_join(thrdinfo->tid, NULL) == -1) {
             print_error("Error joining thread!");
             exit(EXIT_FAILURE);
         }
@@ -109,7 +111,7 @@ int main(int argc, char *argv[])
     pthread_attr_init(&thread_attr);
     pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_JOINABLE);
 
-    signal(SIGUSR1, sig_usr1_handler);
+//    signal(SIGUSR1, sig_usr1_handler);
 
     int curr_thrd = 0;
     double x = 0;
@@ -133,10 +135,11 @@ int main(int argc, char *argv[])
                 curr_thrd = (curr_thrd + 1) % mems_count_n;
             } while (threads_list[curr_thrd].args != ST_THRD_READY);
 
-            kill_thread(threads_list[curr_thrd].tid);
+            kill_thread(threads_list + curr_thrd);
 
     /* pass new aguments */
             threads_list[curr_thrd].args = targs;
+            threads_list[curr_thrd].terminated = 0;
 
             if (pthread_create( &(threads_list[curr_thrd].tid), &thread_attr,
                                 &process, (void*)(threads_list + curr_thrd) ) != 0) {
@@ -159,7 +162,7 @@ int main(int argc, char *argv[])
         while (threads_list[m].args != ST_THRD_READY)
             ; /* wait */
 
-        kill_thread(threads_list[m].tid);
+        kill_thread(threads_list + m);
     }
 
     free(threads_list);
@@ -193,7 +196,7 @@ int main(int argc, char *argv[])
     }
 
     for (m = 0; m < array_size_N; ++m) {
-        fprintf(result_f, "%lf\n", results[m]);
+        fprintf(result_f, "y[%d] = %.10lf\n", m, results[m]);
     }
 
     fclose(result_f);
@@ -228,10 +231,10 @@ void print_error(const char *msg) {
 void print_result(double result, int n) {
     pid_t id = syscall(SYS_gettid);
 
-    printf("%d %d %lf\n", id, n, result);
+    printf("%d %d %.10lf\n", id, n, result);
     fflush(stdout);
 
-    fprintf(temp_f, "%d %d %lf\n", id, n, result);
+    fprintf(temp_f, "%d %d %.10lf\n", id, n, result);
     fflush(temp_f);
 
 }   /* print_result */
@@ -260,7 +263,7 @@ void *process(void *args) {
     info->args = ST_THRD_READY;
 
 
-    while (!terminated) {
+    while (!info->terminated) {
     /* waiting to exit */
     }
 
